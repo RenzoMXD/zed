@@ -52,6 +52,33 @@ pub fn meta_with_tool_name(tool_name: &str) -> acp::Meta {
     acp::Meta::from_iter([(TOOL_NAME_META_KEY.into(), tool_name.into())])
 }
 
+/// Extract a file URI from ACP `_meta`. Checks common keys that external agents
+/// (e.g. Cursor) may use to attach the plan file location.
+fn extract_file_uri_from_meta(meta: &acp::Meta) -> Option<String> {
+    for key in &["fileUri", "file_uri", "uri"] {
+        if let Some(serde_json::Value::String(uri)) = meta.get(*key) {
+            if uri.starts_with("file://") {
+                return Some(uri.clone());
+            }
+        }
+    }
+    None
+}
+
+/// Extract a `file://` URI pointing to a `.plan.md` file from free-form text.
+/// External agents like Cursor emit tool-call output such as
+/// "Plan saved to file:///path/to/plan.plan.md" — this helper finds that URI.
+fn extract_plan_file_uri_from_text(text: &str) -> Option<String> {
+    for word in text.split_whitespace() {
+        // Also handle trailing punctuation / markdown artifacts
+        let trimmed = word.trim_end_matches(|c: char| c == ')' || c == ']' || c == '>' || c == '"' || c == '\'');
+        if trimmed.starts_with("file://") && trimmed.ends_with(".plan.md") {
+            return Some(trimmed.to_string());
+        }
+    }
+    None
+}
+
 /// Key used in ACP ToolCall meta to store the session id and message indexes
 pub const SUBAGENT_SESSION_INFO_META_KEY: &str = "subagent_session_info";
 
@@ -839,6 +866,8 @@ pub struct ToolCallUpdateTerminal {
 #[derive(Debug, Default)]
 pub struct Plan {
     pub entries: Vec<PlanEntry>,
+    /// File URI associated with this plan (e.g. from an external agent's `_meta`).
+    pub file_uri: Option<SharedString>,
 }
 
 #[derive(Debug)]
@@ -1031,6 +1060,7 @@ pub enum AcpThreadEvent {
     AvailableCommandsUpdated(Vec<acp::AvailableCommand>),
     ModeUpdated(acp::SessionModeId),
     ConfigOptionsUpdated(Vec<acp::SessionConfigOption>),
+    PlanFileChanged,
 }
 
 impl EventEmitter<AcpThreadEvent> for AcpThread {}
@@ -1682,6 +1712,12 @@ impl AcpThread {
             unreachable!()
         };
 
+        let tool_call_id = match &update {
+            ToolCallUpdate::UpdateFields(u) => u.tool_call_id.clone(),
+            ToolCallUpdate::UpdateDiff(u) => u.id.clone(),
+            ToolCallUpdate::UpdateTerminal(u) => u.id.clone(),
+        };
+
         match update {
             ToolCallUpdate::UpdateFields(update) => {
                 let location_updated = update.fields.locations.is_some();
@@ -1709,6 +1745,9 @@ impl AcpThread {
         }
 
         cx.emit(AcpThreadEvent::EntryUpdated(ix));
+
+        // Check for plan file URI in completed tool calls (handles ToolCallUpdate path).
+        self.try_extract_plan_file_uri(&tool_call_id, cx);
 
         Ok(())
     }
@@ -1780,6 +1819,9 @@ impl AcpThread {
             self.push_entry(AgentThreadEntry::ToolCall(call), cx);
         };
 
+        // Check for plan file URI in completed tool calls (handles upsert path).
+        self.try_extract_plan_file_uri(&id, cx);
+
         self.resolve_locations(id, cx);
         Ok(())
     }
@@ -1847,6 +1889,97 @@ impl AcpThread {
             }
             _ => None,
         })
+    }
+
+    /// Scan all completed tool calls for a plan file URI.
+    /// Called when a plan update arrives but no file URI has been found yet.
+    fn scan_all_tool_calls_for_plan_file(&mut self, cx: &mut Context<Self>) {
+        let tool_call_ids: Vec<acp::ToolCallId> = self
+            .entries
+            .iter()
+            .filter_map(|entry| {
+                if let AgentThreadEntry::ToolCall(call) = entry {
+                    if matches!(call.status, ToolCallStatus::Completed) {
+                        return Some(call.id.clone());
+                    }
+                }
+                None
+            })
+            .collect();
+
+        for id in tool_call_ids {
+            self.try_extract_plan_file_uri(&id, cx);
+            if self.plan.file_uri.is_some() {
+                break;
+            }
+        }
+    }
+
+    /// Scan a tool call for a plan file URI and associate it with the current plan.
+    /// Checks content blocks (ResourceLink, Markdown text) and raw_output JSON.
+    fn try_extract_plan_file_uri(
+        &mut self,
+        tool_call_id: &acp::ToolCallId,
+        cx: &mut Context<Self>,
+    ) {
+        if self.plan.file_uri.is_some() {
+            return;
+        }
+
+        let Some(ix) = self.index_for_tool_call(tool_call_id) else {
+            return;
+        };
+        let AgentThreadEntry::ToolCall(call) = &self.entries[ix] else {
+            return;
+        };
+
+        if !matches!(call.status, ToolCallStatus::Completed) {
+            return;
+        }
+
+        let mut found_uri: Option<String> = None;
+
+        // Check content blocks
+        for content in &call.content {
+            match content {
+                ToolCallContent::ContentBlock(ContentBlock::ResourceLink {
+                    resource_link,
+                }) => {
+                    if resource_link.uri.starts_with("file://")
+                        && resource_link.uri.ends_with(".plan.md")
+                    {
+                        found_uri = Some(resource_link.uri.clone());
+                        break;
+                    }
+                }
+                ToolCallContent::ContentBlock(ContentBlock::Markdown { markdown }) => {
+                    let source = markdown.read(cx).source().to_string();
+                    if let Some(uri) = extract_plan_file_uri_from_text(&source) {
+                        found_uri = Some(uri);
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        // Check raw_output if not found in content
+        if found_uri.is_none() {
+            if let Some(raw_output) = &call.raw_output {
+                let text = match raw_output {
+                    serde_json::Value::String(s) => Some(s.clone()),
+                    other => serde_json::to_string(other).ok(),
+                };
+                if let Some(text) = text {
+                    found_uri = extract_plan_file_uri_from_text(&text);
+                }
+            }
+        }
+
+        if let Some(uri) = found_uri {
+            self.plan.file_uri = Some(SharedString::from(uri));
+            cx.emit(AcpThreadEvent::PlanFileChanged);
+        }
     }
 
     pub fn resolve_locations(&mut self, id: acp::ToolCallId, cx: &mut Context<Self>) {
@@ -1978,6 +2111,16 @@ impl AcpThread {
     }
 
     pub fn update_plan(&mut self, request: acp::Plan, cx: &mut Context<Self>) {
+        // Extract file URI from plan _meta if present.
+        // Agents like Cursor store the plan file path in _meta under keys like
+        // "fileUri" or "uri".
+        let new_file_uri = request.meta.as_ref().and_then(extract_file_uri_from_meta);
+        let had_file_uri = self.plan.file_uri.is_some();
+
+        if let Some(uri) = new_file_uri {
+            self.plan.file_uri = Some(uri.into());
+        }
+
         let new_entries_len = request.entries.len();
         let mut new_entries = request.entries.into_iter();
 
@@ -1998,6 +2141,16 @@ impl AcpThread {
             self.plan.entries.push(PlanEntry::from_acp(new, cx))
         }
         self.plan.entries.truncate(new_entries_len);
+
+        // If we still don't have a file URI, scan all completed tool calls.
+        // The CreatePlan tool call may have already completed before the plan update arrived.
+        if self.plan.file_uri.is_none() {
+            self.scan_all_tool_calls_for_plan_file(cx);
+        }
+
+        if !had_file_uri && self.plan.file_uri.is_some() {
+            cx.emit(AcpThreadEvent::PlanFileChanged);
+        }
 
         cx.notify();
     }
@@ -4964,5 +5117,63 @@ mod tests {
             &[SharedString::from("Helping with Rust question")],
             "real title should propagate to the connection"
         );
+    }
+
+    #[test]
+    fn test_extract_plan_file_uri_from_text() {
+        // Standard Cursor output
+        assert_eq!(
+            extract_plan_file_uri_from_text(
+                "Plan saved to file:///home/user/project/.cursor/plans/my-plan-abc123.plan.md"
+            ),
+            Some("file:///home/user/project/.cursor/plans/my-plan-abc123.plan.md".to_string())
+        );
+
+        // URI with surrounding punctuation
+        assert_eq!(
+            extract_plan_file_uri_from_text(
+                "Created plan: file:///path/to/plan.plan.md)"
+            ),
+            Some("file:///path/to/plan.plan.md".to_string())
+        );
+
+        // No plan file URI
+        assert_eq!(
+            extract_plan_file_uri_from_text("Plan created successfully"),
+            None,
+        );
+
+        // file:// URI but not a plan file
+        assert_eq!(
+            extract_plan_file_uri_from_text("Saved to file:///home/user/readme.md"),
+            None,
+        );
+
+        // Multiple words, URI somewhere in the middle
+        assert_eq!(
+            extract_plan_file_uri_from_text(
+                "Successfully created plan at file:///workspace/.cursor/plans/intro-7cd14fcb.plan.md and notified the user"
+            ),
+            Some("file:///workspace/.cursor/plans/intro-7cd14fcb.plan.md".to_string())
+        );
+    }
+
+    #[test]
+    fn test_extract_file_uri_from_meta() {
+        let mut meta = acp::Meta::new();
+        meta.insert("fileUri".to_string(), serde_json::Value::String("file:///path/to/plan.plan.md".to_string()));
+        assert_eq!(
+            extract_file_uri_from_meta(&meta),
+            Some("file:///path/to/plan.plan.md".to_string())
+        );
+
+        // Non-file URI should be ignored
+        let mut meta = acp::Meta::new();
+        meta.insert("fileUri".to_string(), serde_json::Value::String("https://example.com".to_string()));
+        assert_eq!(extract_file_uri_from_meta(&meta), None);
+
+        // Empty meta
+        let meta = acp::Meta::new();
+        assert_eq!(extract_file_uri_from_meta(&meta), None);
     }
 }

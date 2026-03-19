@@ -198,6 +198,7 @@ pub struct ThreadView {
     pub subagent_scroll_handles: RefCell<HashMap<agent_client_protocol::SessionId, ScrollHandle>>,
     pub edits_expanded: bool,
     pub plan_expanded: bool,
+    pub expanded_plan_entries: HashSet<usize>,
     pub queue_expanded: bool,
     pub editor_expanded: bool,
     pub should_be_following: bool,
@@ -435,6 +436,7 @@ impl ThreadView {
             subagent_scroll_handles: RefCell::new(HashMap::default()),
             edits_expanded: false,
             plan_expanded: false,
+            expanded_plan_entries: HashSet::default(),
             queue_expanded: true,
             editor_expanded: false,
             should_be_following: false,
@@ -2329,10 +2331,12 @@ impl ThreadView {
                         .text_xs()
                         .text_color(cx.theme().colors().text_muted)
                         .line_clamp(1)
-                        .child(MarkdownElement::new(
-                            entry.content.clone(),
-                            plan_label_markdown_style(&entry.status, window, cx),
-                        )),
+                        .child(
+                            MarkdownElement::new(
+                                entry.content.clone(),
+                                plan_label_markdown_style(&entry.status, window, cx),
+                            ),
+                        ),
                 )
                 .when(stats.pending > 0, |this| {
                     this.child(
@@ -2404,54 +2408,161 @@ impl ThreadView {
         window: &mut Window,
         cx: &Context<Self>,
     ) -> impl IntoElement {
+        let plan_file_uri = plan.file_uri.clone();
+
         v_flex()
             .id("plan_items_list")
-            .max_h_40()
+            .max_h(px(320.))
             .overflow_y_scroll()
             .children(plan.entries.iter().enumerate().flat_map(|(index, entry)| {
-                let element = h_flex()
+                let is_expanded = self.expanded_plan_entries.contains(&index);
+
+                let status_icon = match entry.status {
+                    acp::PlanEntryStatus::InProgress => Icon::new(IconName::TodoProgress)
+                        .size(IconSize::Small)
+                        .color(Color::Accent)
+                        .with_rotate_animation(2)
+                        .into_any_element(),
+                    acp::PlanEntryStatus::Completed => Icon::new(IconName::TodoComplete)
+                        .size(IconSize::Small)
+                        .color(Color::Success)
+                        .into_any_element(),
+                    acp::PlanEntryStatus::Pending | _ => Icon::new(IconName::TodoPending)
+                        .size(IconSize::Small)
+                        .color(Color::Muted)
+                        .into_any_element(),
+                };
+
+                let status_label = match entry.status {
+                    acp::PlanEntryStatus::Pending => "Pending",
+                    acp::PlanEntryStatus::InProgress => "In Progress",
+                    acp::PlanEntryStatus::Completed => "Completed",
+                    _ => "Unknown",
+                };
+                let priority_label = match entry.priority {
+                    acp::PlanEntryPriority::High => Some("High"),
+                    acp::PlanEntryPriority::Medium => None, // Don't show medium (default)
+                    acp::PlanEntryPriority::Low => Some("Low"),
+                    _ => None,
+                };
+
+                let element = v_flex()
+                    .id(("plan_entry_row", index))
                     .py_1()
                     .px_2()
-                    .gap_2()
-                    .justify_between()
                     .bg(cx.theme().colors().editor_background)
                     .when(index < plan.entries.len() - 1, |parent| {
                         parent.border_color(cx.theme().colors().border).border_b_1()
                     })
+                    // Header row: disclosure + status icon + entry number (clickable)
                     .child(
                         h_flex()
-                            .id(("plan_entry", index))
+                            .id(("plan_entry_header", index))
                             .gap_1p5()
-                            .max_w_full()
-                            .overflow_x_scroll()
+                            .items_center()
+                            .w_full()
                             .text_xs()
                             .text_color(cx.theme().colors().text_muted)
-                            .child(match entry.status {
-                                acp::PlanEntryStatus::InProgress => {
-                                    Icon::new(IconName::TodoProgress)
-                                        .size(IconSize::Small)
-                                        .color(Color::Accent)
-                                        .with_rotate_animation(2)
-                                        .into_any_element()
+                            .cursor_pointer()
+                            .hover(|style| style.bg(cx.theme().colors().element_hover))
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                if this.expanded_plan_entries.contains(&index) {
+                                    this.expanded_plan_entries.remove(&index);
+                                } else {
+                                    this.expanded_plan_entries.insert(index);
                                 }
-                                acp::PlanEntryStatus::Completed => {
-                                    Icon::new(IconName::TodoComplete)
-                                        .size(IconSize::Small)
-                                        .color(Color::Success)
-                                        .into_any_element()
-                                }
-                                acp::PlanEntryStatus::Pending | _ => {
-                                    Icon::new(IconName::TodoPending)
-                                        .size(IconSize::Small)
-                                        .color(Color::Muted)
-                                        .into_any_element()
-                                }
-                            })
-                            .child(MarkdownElement::new(
-                                entry.content.clone(),
-                                plan_label_markdown_style(&entry.status, window, cx),
-                            )),
-                    );
+                                cx.notify();
+                            }))
+                            .child(
+                                Disclosure::new(
+                                    ("plan_entry_disclosure", index),
+                                    is_expanded,
+                                ),
+                            )
+                            .child(status_icon)
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .overflow_x_hidden()
+                                    .line_clamp(1)
+                                    .child(
+                                        MarkdownElement::new(
+                                            entry.content.clone(),
+                                            plan_label_markdown_style(
+                                                &entry.status,
+                                                window,
+                                                cx,
+                                            ),
+                                        ),
+                                    ),
+                            )
+                            .when(plan_file_uri.is_some(), |this| {
+                                let file_uri = plan_file_uri.clone().unwrap();
+                                let workspace = self.workspace.clone();
+                                this.child(
+                                    IconButton::new(
+                                        ("open_plan_file", index),
+                                        IconName::ArrowUpRight,
+                                    )
+                                    .icon_size(IconSize::XSmall)
+                                    .icon_color(Color::Muted)
+                                    .tooltip(Tooltip::text("Open Plan File"))
+                                    .on_click(move |_, window, cx| {
+                                        open_file_uri(
+                                            &file_uri,
+                                            &workspace,
+                                            window,
+                                            cx,
+                                        );
+                                    }),
+                                )
+                            }),
+                    )
+                    // Expanded: full content + status + priority
+                    .when(is_expanded, |this| {
+                        let workspace = self.workspace.clone();
+                        this.child(
+                            v_flex()
+                                .pl(px(40.))
+                                .pr_2()
+                                .pb_1()
+                                .gap_1()
+                                .child(
+                                    div()
+                                        .text_xs()
+                                        .text_color(cx.theme().colors().text)
+                                        .child(
+                                            MarkdownElement::new(
+                                                entry.content.clone(),
+                                                plan_label_markdown_style(
+                                                    &entry.status,
+                                                    window,
+                                                    cx,
+                                                ),
+                                            )
+                                            .on_url_click(move |url, window, cx| {
+                                                open_link(url, &workspace, window, cx);
+                                            }),
+                                        ),
+                                )
+                                .child(
+                                    h_flex()
+                                        .gap_2()
+                                        .child(
+                                            Label::new(format!("Status: {status_label}"))
+                                                .size(LabelSize::XSmall)
+                                                .color(Color::Muted),
+                                        )
+                                        .when_some(priority_label, |this, priority| {
+                                            this.child(
+                                                Label::new(format!("Priority: {priority}"))
+                                                    .size(LabelSize::XSmall)
+                                                    .color(Color::Muted),
+                                            )
+                                        }),
+                                ),
+                        )
+                    });
 
                 Some(element)
             }))
@@ -7976,6 +8087,39 @@ impl Render for ThreadView {
             )
             .children(self.render_token_limit_callout(cx))
             .child(self.render_message_editor(window, cx))
+    }
+}
+
+/// Open a `file://` URI by absolute path, bypassing project tree lookups.
+/// Used for plan files in `.cursor/plans/` which may not be indexed in the project.
+pub(crate) fn open_file_uri(
+    uri: &SharedString,
+    workspace: &WeakEntity<Workspace>,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    let Some(workspace) = workspace.upgrade() else {
+        return;
+    };
+    let path_style = workspace.read(cx).path_style(cx);
+    if let Some(mention) = MentionUri::parse(uri, path_style).log_err() {
+        if let MentionUri::File { abs_path } = mention {
+            workspace.update(cx, |workspace, cx| {
+                // Try project path first; fall back to opening by absolute path directly.
+                let project = workspace.project();
+                if let Some(path) =
+                    project.update(cx, |project, cx| project.find_project_path(&abs_path, cx))
+                {
+                    workspace
+                        .open_path(path, None, true, window, cx)
+                        .detach_and_log_err(cx);
+                } else {
+                    workspace
+                        .open_abs_path(abs_path, Default::default(), window, cx)
+                        .detach_and_log_err(cx);
+                }
+            });
+        }
     }
 }
 
