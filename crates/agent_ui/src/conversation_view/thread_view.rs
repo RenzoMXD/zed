@@ -2508,8 +2508,8 @@ impl ThreadView {
                                     .icon_color(Color::Muted)
                                     .tooltip(Tooltip::text("Open Plan File"))
                                     .on_click(move |_, window, cx| {
-                                        open_file_uri(
-                                            &file_uri,
+                                        open_link(
+                                            file_uri.clone(),
                                             &workspace,
                                             window,
                                             cx,
@@ -8092,37 +8092,6 @@ impl Render for ThreadView {
 
 /// Open a `file://` URI by absolute path, bypassing project tree lookups.
 /// Used for plan files in `.cursor/plans/` which may not be indexed in the project.
-pub(crate) fn open_file_uri(
-    uri: &SharedString,
-    workspace: &WeakEntity<Workspace>,
-    window: &mut Window,
-    cx: &mut App,
-) {
-    let Some(workspace) = workspace.upgrade() else {
-        return;
-    };
-    let path_style = workspace.read(cx).path_style(cx);
-    if let Some(mention) = MentionUri::parse(uri, path_style).log_err() {
-        if let MentionUri::File { abs_path } = mention {
-            workspace.update(cx, |workspace, cx| {
-                // Try project path first; fall back to opening by absolute path directly.
-                let project = workspace.project();
-                if let Some(path) =
-                    project.update(cx, |project, cx| project.find_project_path(&abs_path, cx))
-                {
-                    workspace
-                        .open_path(path, None, true, window, cx)
-                        .detach_and_log_err(cx);
-                } else {
-                    workspace
-                        .open_abs_path(abs_path, Default::default(), window, cx)
-                        .detach_and_log_err(cx);
-                }
-            });
-        }
-    }
-}
-
 pub(crate) fn open_link(
     url: SharedString,
     workspace: &WeakEntity<Workspace>,
@@ -8138,15 +8107,19 @@ pub(crate) fn open_link(
         workspace.update(cx, |workspace, cx| match mention {
             MentionUri::File { abs_path } => {
                 let project = workspace.project();
-                let Some(path) =
-                    project.update(cx, |project, cx| project.find_project_path(abs_path, cx))
-                else {
-                    return;
-                };
-
-                workspace
-                    .open_path(path, None, true, window, cx)
-                    .detach_and_log_err(cx);
+                if let Some(path) =
+                    project.update(cx, |project, cx| project.find_project_path(&abs_path, cx))
+                {
+                    workspace
+                        .open_path(path, None, true, window, cx)
+                        .detach_and_log_err(cx);
+                } else {
+                    // Fallback: open by absolute path for files outside the project
+                    // tree (e.g. .cursor/plans/).
+                    workspace
+                        .open_abs_path(abs_path, Default::default(), window, cx)
+                        .detach_and_log_err(cx);
+                }
             }
             MentionUri::PastedImage => {}
             MentionUri::Directory { abs_path } => {

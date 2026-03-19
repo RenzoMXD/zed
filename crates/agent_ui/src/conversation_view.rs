@@ -1469,7 +1469,7 @@ impl ConversationView {
             AcpThreadEvent::PlanFileChanged => {
                 // Auto-open the plan file when the plan file URI is first set
                 if let Some(file_uri) = thread.read(cx).plan().file_uri.clone() {
-                    thread_view::open_file_uri(&file_uri, &self.workspace, window, cx);
+                    thread_view::open_link(file_uri, &self.workspace, window, cx);
                 }
             }
         }

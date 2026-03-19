@@ -1891,30 +1891,6 @@ impl AcpThread {
         })
     }
 
-    /// Scan all completed tool calls for a plan file URI.
-    /// Called when a plan update arrives but no file URI has been found yet.
-    fn scan_all_tool_calls_for_plan_file(&mut self, cx: &mut Context<Self>) {
-        let tool_call_ids: Vec<acp::ToolCallId> = self
-            .entries
-            .iter()
-            .filter_map(|entry| {
-                if let AgentThreadEntry::ToolCall(call) = entry {
-                    if matches!(call.status, ToolCallStatus::Completed) {
-                        return Some(call.id.clone());
-                    }
-                }
-                None
-            })
-            .collect();
-
-        for id in tool_call_ids {
-            self.try_extract_plan_file_uri(&id, cx);
-            if self.plan.file_uri.is_some() {
-                break;
-            }
-        }
-    }
-
     /// Scan a tool call for a plan file URI and associate it with the current plan.
     /// Checks content blocks (ResourceLink, Markdown text) and raw_output JSON.
     fn try_extract_plan_file_uri(
@@ -2141,12 +2117,6 @@ impl AcpThread {
             self.plan.entries.push(PlanEntry::from_acp(new, cx))
         }
         self.plan.entries.truncate(new_entries_len);
-
-        // If we still don't have a file URI, scan all completed tool calls.
-        // The CreatePlan tool call may have already completed before the plan update arrived.
-        if self.plan.file_uri.is_none() {
-            self.scan_all_tool_calls_for_plan_file(cx);
-        }
 
         if !had_file_uri && self.plan.file_uri.is_some() {
             cx.emit(AcpThreadEvent::PlanFileChanged);
