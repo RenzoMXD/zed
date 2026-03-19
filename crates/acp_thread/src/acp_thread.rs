@@ -52,8 +52,6 @@ pub fn meta_with_tool_name(tool_name: &str) -> acp::Meta {
     acp::Meta::from_iter([(TOOL_NAME_META_KEY.into(), tool_name.into())])
 }
 
-/// Extract a file URI from ACP `_meta`. Checks common keys that external agents
-/// (e.g. Cursor) may use to attach the plan file location.
 fn extract_file_uri_from_meta(meta: &acp::Meta) -> Option<String> {
     for key in &["fileUri", "file_uri", "uri"] {
         if let Some(serde_json::Value::String(uri)) = meta.get(*key) {
@@ -65,12 +63,8 @@ fn extract_file_uri_from_meta(meta: &acp::Meta) -> Option<String> {
     None
 }
 
-/// Extract a `file://` URI pointing to a `.plan.md` file from free-form text.
-/// External agents like Cursor emit tool-call output such as
-/// "Plan saved to file:///path/to/plan.plan.md" — this helper finds that URI.
 fn extract_plan_file_uri_from_text(text: &str) -> Option<String> {
     for word in text.split_whitespace() {
-        // Also handle trailing punctuation / markdown artifacts
         let trimmed = word.trim_end_matches(|c: char| c == ')' || c == ']' || c == '>' || c == '"' || c == '\'');
         if trimmed.starts_with("file://") && trimmed.ends_with(".plan.md") {
             return Some(trimmed.to_string());
@@ -866,7 +860,6 @@ pub struct ToolCallUpdateTerminal {
 #[derive(Debug, Default)]
 pub struct Plan {
     pub entries: Vec<PlanEntry>,
-    /// File URI associated with this plan (e.g. from an external agent's `_meta`).
     pub file_uri: Option<SharedString>,
 }
 
@@ -1746,7 +1739,6 @@ impl AcpThread {
 
         cx.emit(AcpThreadEvent::EntryUpdated(ix));
 
-        // Check for plan file URI in completed tool calls (handles ToolCallUpdate path).
         self.try_extract_plan_file_uri(&tool_call_id, cx);
 
         Ok(())
@@ -1819,7 +1811,6 @@ impl AcpThread {
             self.push_entry(AgentThreadEntry::ToolCall(call), cx);
         };
 
-        // Check for plan file URI in completed tool calls (handles upsert path).
         self.try_extract_plan_file_uri(&id, cx);
 
         self.resolve_locations(id, cx);
@@ -1891,8 +1882,6 @@ impl AcpThread {
         })
     }
 
-    /// Scan a tool call for a plan file URI and associate it with the current plan.
-    /// Checks content blocks (ResourceLink, Markdown text) and raw_output JSON.
     fn try_extract_plan_file_uri(
         &mut self,
         tool_call_id: &acp::ToolCallId,
@@ -1915,7 +1904,6 @@ impl AcpThread {
 
         let mut found_uri: Option<String> = None;
 
-        // Check content blocks
         for content in &call.content {
             match content {
                 ToolCallContent::ContentBlock(ContentBlock::ResourceLink {
@@ -1939,7 +1927,6 @@ impl AcpThread {
             }
         }
 
-        // Check raw_output if not found in content
         if found_uri.is_none() {
             if let Some(raw_output) = &call.raw_output {
                 let text = match raw_output {
@@ -2087,9 +2074,6 @@ impl AcpThread {
     }
 
     pub fn update_plan(&mut self, request: acp::Plan, cx: &mut Context<Self>) {
-        // Extract file URI from plan _meta if present.
-        // Agents like Cursor store the plan file path in _meta under keys like
-        // "fileUri" or "uri".
         let new_file_uri = request.meta.as_ref().and_then(extract_file_uri_from_meta);
         let had_file_uri = self.plan.file_uri.is_some();
 

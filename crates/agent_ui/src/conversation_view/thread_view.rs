@@ -2441,7 +2441,7 @@ impl ThreadView {
                 };
                 let priority_label = match entry.priority {
                     acp::PlanEntryPriority::High => Some("High"),
-                    acp::PlanEntryPriority::Medium => None, // Don't show medium (default)
+                    acp::PlanEntryPriority::Medium => None,
                     acp::PlanEntryPriority::Low => Some("Low"),
                     _ => None,
                 };
@@ -2454,7 +2454,6 @@ impl ThreadView {
                     .when(index < plan.entries.len() - 1, |parent| {
                         parent.border_color(cx.theme().colors().border).border_b_1()
                     })
-                    // Header row: disclosure + status icon + entry number (clickable)
                     .child(
                         h_flex()
                             .id(("plan_entry_header", index))
@@ -2518,7 +2517,6 @@ impl ThreadView {
                                 )
                             }),
                     )
-                    // Expanded: full content + status + priority
                     .when(is_expanded, |this| {
                         let workspace = self.workspace.clone();
                         this.child(
@@ -8090,8 +8088,6 @@ impl Render for ThreadView {
     }
 }
 
-/// Open a `file://` URI by absolute path, bypassing project tree lookups.
-/// Used for plan files in `.cursor/plans/` which may not be indexed in the project.
 pub(crate) fn open_link(
     url: SharedString,
     workspace: &WeakEntity<Workspace>,
@@ -8114,8 +8110,6 @@ pub(crate) fn open_link(
                         .open_path(path, None, true, window, cx)
                         .detach_and_log_err(cx);
                 } else {
-                    // Fallback: open by absolute path for files outside the project
-                    // tree (e.g. .cursor/plans/).
                     workspace
                         .open_abs_path(abs_path, Default::default(), window, cx)
                         .detach_and_log_err(cx);
