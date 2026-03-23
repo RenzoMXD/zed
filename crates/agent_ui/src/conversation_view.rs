@@ -204,6 +204,7 @@ impl Conversation {
                 | AcpThreadEvent::ModeUpdated(_)
                 | AcpThreadEvent::ConfigOptionsUpdated(_)
                 | AcpThreadEvent::PlanFileChanged => {}
+            }
         });
         self.subscriptions.push(subscription);
         self.threads

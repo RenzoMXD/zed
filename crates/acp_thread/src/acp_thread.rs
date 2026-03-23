@@ -66,7 +66,8 @@ fn extract_file_uri_from_meta(meta: &acp::Meta) -> Option<String> {
 
 fn extract_plan_file_uri_from_text(text: &str) -> Option<String> {
     for word in text.split_whitespace() {
-        let trimmed = word.trim_end_matches(|c: char| c == ')' || c == ']' || c == '>' || c == '"' || c == '\'');
+        let trimmed = word
+            .trim_end_matches(|c: char| c == ')' || c == ']' || c == '>' || c == '"' || c == '\'');
         if trimmed.starts_with("file://") && trimmed.ends_with(".plan.md") {
             return Some(trimmed.to_string());
         }
@@ -1976,9 +1977,7 @@ impl AcpThread {
 
         for content in &call.content {
             match content {
-                ToolCallContent::ContentBlock(ContentBlock::ResourceLink {
-                    resource_link,
-                }) => {
+                ToolCallContent::ContentBlock(ContentBlock::ResourceLink { resource_link }) => {
                     if resource_link.uri.starts_with("file://")
                         && resource_link.uri.ends_with(".plan.md")
                     {
@@ -5159,9 +5158,7 @@ mod tests {
 
         // URI with surrounding punctuation
         assert_eq!(
-            extract_plan_file_uri_from_text(
-                "Created plan: file:///path/to/plan.plan.md)"
-            ),
+            extract_plan_file_uri_from_text("Created plan: file:///path/to/plan.plan.md)"),
             Some("file:///path/to/plan.plan.md".to_string())
         );
 
@@ -5189,7 +5186,10 @@ mod tests {
     #[test]
     fn test_extract_file_uri_from_meta() {
         let mut meta = acp::Meta::new();
-        meta.insert("fileUri".to_string(), serde_json::Value::String("file:///path/to/plan.plan.md".to_string()));
+        meta.insert(
+            "fileUri".to_string(),
+            serde_json::Value::String("file:///path/to/plan.plan.md".to_string()),
+        );
         assert_eq!(
             extract_file_uri_from_meta(&meta),
             Some("file:///path/to/plan.plan.md".to_string())
@@ -5197,7 +5197,10 @@ mod tests {
 
         // Non-file URI should be ignored
         let mut meta = acp::Meta::new();
-        meta.insert("fileUri".to_string(), serde_json::Value::String("https://example.com".to_string()));
+        meta.insert(
+            "fileUri".to_string(),
+            serde_json::Value::String("https://example.com".to_string()),
+        );
         assert_eq!(extract_file_uri_from_meta(&meta), None);
 
         // Empty meta

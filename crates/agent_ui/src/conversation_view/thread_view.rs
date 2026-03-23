@@ -2524,12 +2524,10 @@ impl ThreadView {
                         .text_xs()
                         .text_color(cx.theme().colors().text_muted)
                         .line_clamp(1)
-                        .child(
-                            MarkdownElement::new(
-                                entry.content.clone(),
-                                plan_label_markdown_style(&entry.status, window, cx),
-                            ),
-                        ),
+                        .child(MarkdownElement::new(
+                            entry.content.clone(),
+                            plan_label_markdown_style(&entry.status, window, cx),
+                        )),
                 )
                 .when(stats.pending > 0, |this| {
                     this.child(
@@ -2665,29 +2663,17 @@ impl ThreadView {
                                 }
                                 cx.notify();
                             }))
-                            .child(
-                                Disclosure::new(
-                                    ("plan_entry_disclosure", index),
-                                    is_expanded,
-                                ),
-                            )
+                            .child(Disclosure::new(
+                                ("plan_entry_disclosure", index),
+                                is_expanded,
+                            ))
                             .child(status_icon)
-                            .child(
-                                div()
-                                    .flex_1()
-                                    .overflow_x_hidden()
-                                    .line_clamp(1)
-                                    .child(
-                                        MarkdownElement::new(
-                                            entry.content.clone(),
-                                            plan_label_markdown_style(
-                                                &entry.status,
-                                                window,
-                                                cx,
-                                            ),
-                                        ),
-                                    ),
-                            )
+                            .child(div().flex_1().overflow_x_hidden().line_clamp(1).child(
+                                MarkdownElement::new(
+                                    entry.content.clone(),
+                                    plan_label_markdown_style(&entry.status, window, cx),
+                                ),
+                            ))
                             .when(plan_file_uri.is_some(), |this| {
                                 let file_uri = plan_file_uri.clone().unwrap();
                                 let workspace = self.workspace.clone();
@@ -2699,14 +2685,11 @@ impl ThreadView {
                                     .icon_size(IconSize::XSmall)
                                     .icon_color(Color::Muted)
                                     .tooltip(Tooltip::text("Open Plan File"))
-                                    .on_click(move |_, window, cx| {
-                                        open_link(
-                                            file_uri.clone(),
-                                            &workspace,
-                                            window,
-                                            cx,
-                                        );
-                                    }),
+                                    .on_click(
+                                        move |_, window, cx| {
+                                            open_link(file_uri.clone(), &workspace, window, cx);
+                                        },
+                                    ),
                                 )
                             }),
                     )
@@ -2719,22 +2702,17 @@ impl ThreadView {
                                 .pb_1()
                                 .gap_1()
                                 .child(
-                                    div()
-                                        .text_xs()
-                                        .text_color(cx.theme().colors().text)
-                                        .child(
-                                            MarkdownElement::new(
-                                                entry.content.clone(),
-                                                plan_label_markdown_style(
-                                                    &entry.status,
-                                                    window,
-                                                    cx,
-                                                ),
-                                            )
-                                            .on_url_click(move |url, window, cx| {
+                                    div().text_xs().text_color(cx.theme().colors().text).child(
+                                        MarkdownElement::new(
+                                            entry.content.clone(),
+                                            plan_label_markdown_style(&entry.status, window, cx),
+                                        )
+                                        .on_url_click(
+                                            move |url, window, cx| {
                                                 open_link(url, &workspace, window, cx);
-                                            }),
+                                            },
                                         ),
+                                    ),
                                 )
                                 .child(
                                     h_flex()
