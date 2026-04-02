@@ -813,9 +813,9 @@ mod tests {
         cx.update(|cx| {
             let store = SettingsStore::test(cx);
             cx.set_global(store);
-            theme::init(theme::LoadThemes::JustBase, cx);
+            theme_settings::init(theme::LoadThemes::JustBase, cx);
 
-            language_model::init_settings(cx);
+            language_model::init(cx);
             editor::init(cx);
         });
 
